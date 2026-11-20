@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Monstros de Aural — RPG 2D</title>
+<style>
+:root{--ink:#17231d;--panel:#f5f0d8;--green:#427a4c;--dark:#244b37;--gold:#e6bd58}
+*{box-sizing:border-box}body{margin:0;background:#18251f;color:#fff;font-family:system-ui,Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:12px}
+#app{width:min(100%,900px)}header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 8px}h1{font-size:clamp(18px,4vw,26px);margin:0;color:#f4d77d}#status{font-size:12px;color:#d8e6d5}
+#frame{background:#344d3d;padding:10px;border:4px solid #101a15;border-radius:12px;box-shadow:0 12px 35px #0008}
+canvas{display:block;width:100%;height:auto;image-rendering:pixelated;background:#8acb78;border:3px solid #18251f;border-radius:4px;touch-action:none}
+#hud{display:flex;gap:8px;justify-content:space-between;align-items:center;flex-wrap:wrap;padding:8px 2px 2px;font-size:13px;color:#eaf3df}
+#controls{display:grid;grid-template-columns:repeat(3,58px);grid-template-rows:repeat(2,48px);gap:5px;justify-content:center;margin:12px auto 0}
+.ctrl{border:2px solid #111c16;background:#d8d1ad;color:#18251f;border-radius:9px;font-size:20px;font-weight:800;touch-action:none}
+#actions{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:10px}
+button{cursor:pointer}.action{border:2px solid #101a15;border-radius:8px;padding:9px 14px;background:#e6bd58;color:#17231d;font-weight:800}
+#hint{text-align:center;color:#cbd9c8;font-size:12px;margin:8px}
+#overlay{position:fixed;inset:0;background:#08120edb;display:flex;align-items:center;justify-content:center;padding:16px;z-index:5}
+.dialog{background:#f5f0d8;color:#17231d;border:4px solid #17231d;border-radius:12px;padding:18px;width:min(100%,460px);box-shadow:0 15px 40px #0009}
+.dialog h2{margin:0 0 8px;color:#244b37}.dialog p{line-height:1.45}.choices{display:grid;gap:8px}.choice{background:#dce8c9;border:2px solid #456b4b;padding:10px;border-radius:8px;text-align:left;color:#17231d;font-weight:700}
+.choice small{display:block;font-weight:400;margin-top:3px}.hidden{display:none!important}
+@media(min-width:700px){#controls{display:none}#hint{font-size:13px}}
+</style>
+</head>
+<body>
+<div id="app">
+<header><h1>MONSTROS DE AURAL</h1><div id="status">Aventura 2D · Capítulo 1</div></header>
+<div id="frame">
+<canvas id="game" width="480" height="320" aria-label="Mundo do jogo"></canvas>
+<div id="hud"><span id="party">Equipa: —</span><span id="items">Orbes: 5</span><span id="place">Aldeia de Brisa</span></div>
+</div>
+<div id="controls">
+<div></div><button class="ctrl" data-dir="up">▲</button><div></div>
+<button class="ctrl" data-dir="left">◀</button><button class="ctrl" data-dir="down">▼</button><button class="ctrl" data-dir="right">▶</button>
+</div>
+<div id="actions"><button class="action" id="talk">Falar / Interagir (E)</button><button class="action" id="team">Equipa</button><button class="action" id="save">Guardar</button></div>
+<div id="hint">Mover: setas ou WASD · Interagir: E · No telemóvel usa os controlos</div>
+</div>
+<div id="overlay"><div class="dialog" id="dialog"></div></div>
+<script>
+(()=>{
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+ctx.imageSmoothingEnabled=false;
+const W=480,H=320,T=16,cols=30,rows=20;
+const keys={};let mode='intro',player={x:14,y:13,dir:'down',step:0},orbs=5,team=[],wild=null,turn=0,notice='',noticeTimer=0;
+const names=['Folhito','Braseco','Marulho','Pedruxo','Lumimel','Névoa'];
+const mons={
+Folhito:{type:'NATUREZA',hp:25,atk:7,color:'#70b85b',moves:['Folha Viva','Investida']},
+Braseco:{type:'FOGO',hp:23,atk:8,color:'#ed8750',moves:['Faísca','Investida']},
+Marulho:{type:'ÁGUA',hp:27,atk:6,color:'#62a9dc',moves:['Jato de Água','Investida']},
+Pedruxo:{type:'ROCHA',hp:31,atk:6,color:'#b5a078',moves:['Pedrada','Investida']},
+Lumimel:{type:'LUZ',hp:21,atk:8,color:'#e8d56b',moves:['Brilho','Investida']},
+Névoa:{type:'AR',hp:24,atk:7,color:'#a9c6c7',moves:['Rajada','Investida']}
+};
+const map=Array.from({length:rows},(_,y)=>Array.from({length:cols},(_,x)=>{
+ if(x===0||y===0||x===cols-1||y===rows-1)return 1;
+ if((x===5||x===6)&&y>3&&y<16)return 1;
+ if(y===5&&x>17&&x<26)return 1;
+ if(x>2&&x<9&&y>2&&y<7)return 2;
+ if(x>20&&y>11&&x<27&&y<18)return 3;
+ return 0;
+}));
+for(let x=11;x<19;x++)map[8][x]=0;
+for(let y=9;y<15;y++)map[y][18]=0;
+function tile(x,y){return map[y]?.[x]??1}
+function rnd(a){return a[Math.floor(Math.random()*a.length)]}
+function rect(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(Math.round(x),Math.round(y),w,h)}
+function text(s,x,y,size=10,color='#17231d'){ctx.fillStyle=color;ctx.font=`bold ${size}px monospace`;ctx.fillText(s,x,y)}
+function drawTile(x,y,t){
+ const px=x*T,py=y*T;
+ if(t===1){rect(px,py,16,16,'#477b4b');rect(px+2,py+2,12,11,'#568c51');rect(px+3,py+4,3,2,'#6ca35c');}
+ else if(t===2){rect(px,py,16,16,'#b6a879');rect(px+2,py+3,3,2,'#d2c18c');rect(px+10,py+10,4,2,'#9d8c63');}
+ else if(t===3){rect(px,py,16,16,'#62a7cf');rect(px,py+4,16,2,'#8ac7df');rect(px+4,py+11,6,1,'#d4eff0');}
+ else {rect(px,py,16,16,'#8acb78');rect(px+2,py+3,2,2,'#9bd887');}
+}
+function drawPlayer(){
+ let x=player.x*T,y=player.y*T;
+ rect(x+4,y+9,8,6,'#344b9a');rect(x+3,y+4,10,7,'#f0c49a');rect(x+2,y+2,12,4,'#70462d');
+ rect(x+3,y+14,4,2,'#49372b');rect(x+9,y+14,4,2,'#49372b');
+ rect(x+5,y+6,1,1,'#17231d');rect(x+10,y+6,1,1,'#17231d');
+}
+function drawNPC(x,y){
+ rect(x*T+4,y*T+8,8,7,'#bd754a');rect(x*T+3,y*T+3,10,7,'#e6c28d');rect(x*T+2,y*T+1,12,4,'#67452e');
+}
+function drawMonster(name,x,y,scale=1){
+ let m=mons[name],cx=x,cy=y;
+ ctx.save();ctx.translate(cx,cy);ctx.scale(scale,scale);
+ rect(-9,-5,18,13,m.color);rect(-7,-9,14,8,m.color);
+ rect(-6,-11,4,4,'#fff');rect(2,-11,4,4,'#fff');rect(-5,-10,2,2,'#17231d');rect(3,-10,2,2,'#17231d');
+ rect(-7,7,4,3,'#344b3d');rect(3,7,4,3,'#344b3d');
+ if(name==='Folhito'){rect(-2,-15,4,6,'#3e8e4c');rect(1,-16,5,3,'#80c85c')}
+ if(name==='Braseco'){rect(-3,-14,6,5,'#f5bd53')}
+ if(name==='Marulho'){rect(-3,-15,6,4,'#a8def1')}
+ ctx.restore();
+}
+function render(){
+ ctx.clearRect(0,0,W,H);
+ let camX=Math.max(0,Math.min(cols*16-W,player.x*16-W/2+8)),camY=Math.max(0,Math.min(rows*16-H,player.y*16-H/2+8));
+ for(let y=0;y<rows;y++)for(let x=0;x<cols;x++)drawTile(x,y,tile(x,y));
+ // tall grass patches
+ for(let y=0;y<rows;y++)for(let x=0;x<cols;x++)if((x>21&&y>12&&x<27&&y<18)||(x>8&&x<12&&y>9&&y<15)){
+  let px=x*16,py=y*16;rect(px+2,py+7,3,8,'#3e8d4c');rect(px+6,py+4,3,11,'#4c9e50');rect(px+10,py+8,3,7,'#367c45');
+ }
+ drawNPC(13,8);drawNPC(18,10);
+ drawPlayer();
+ // camera crop via offscreen
+ const img=ctx.getImageData(0,0,W,H);ctx.putImageData(img,0,0);
+ if(mode==='battle')drawBattle();
+ if(noticeTimer>0){rect(8,8,464,24,'#f5f0d8');text(notice,16,24,10);noticeTimer--;}
+}
+function drawBattle(){
+ rect(0,0,W,H,'#b6d5ad');
+ for(let y=0;y<20;y++)for(let x=0;x<30;x++){rect(x*16,y*16,16,16,(x+y)%2?'#b8d8aa':'#c5dfb6')}
+ rect(18,28,125,44,'#f5f0d8');rect(20,30,121,40,'#f5f0d8');text(wild.name,28,44,12);text(`PV ${wild.hp}/${wild.max}`,28,60,10);
+ drawMonster(wild.name,335,93,2.4);
+ const p=team[0];rect(315,174,145,48,'#f5f0d8');text(p.name,325,190,12);text(`PV ${p.hp}/${p.max}`,325,207,10);
+ drawMonster(p.name,135,218,2.8);
+ rect(8,252,464,60,'#f5f0d8');text(notice||'O que vais fazer?',18,270,11);
+ text('1 Ataque   2 Ataque forte   3 Orbe   4 Fugir',18,292,10);
+}
+function updateHud(){document.getElementById('party').textContent='Equipa: '+(team.map(m=>m.name+' '+m.hp+'/'+m.max).join(' · ')||'—');document.getElementById('items').textContent='Orbes: '+orbs;document.getElementById('place').textContent=player.x>20?'Prado de Aural':'Aldeia de Brisa'}
+function showDialog(title,body,buttons){
+ mode='dialog';const d=document.getElementById('dialog');d.innerHTML=`<h2>${title}</h2><p>${body}</p><div class="choices"></div>`;
+ const c=d.querySelector('.choices');buttons.forEach(b=>{let el=document.createElement('button');el.className='choice';el.innerHTML=b.label;el.onclick=b.fn;c.appendChild(el)});document.getElementById('overlay').classList.remove('hidden');
+}
+function closeDialog(){document.getElementById('overlay').classList.add('hidden');mode='world';}
+function startGame(){
+ showDialog('Escolhe o teu primeiro companheiro','A Professora Lira oferece-te um destes três monstros. Cada um tem as suas próprias vantagens.',[
+ {label:'🌿 Folhito <small>Natureza · equilibrado</small>',fn:()=>choose('Folhito')},
+ {label:'🔥 Braseco <small>Fogo · ataque forte</small>',fn:()=>choose('Braseco')},
+ {label:'💧 Marulho <small>Água · mais resistência</small>',fn:()=>choose('Marulho')}
+ ]);
+}
+function choose(n){team=[makeMon(n)];closeDialog();notice=`${n} juntou-se à tua equipa!`;noticeTimer=150;updateHud();render()}
+function makeMon(n){let m=mons[n];return{name:n,hp:m.hp,max:m.hp,atk:m.atk,level:5,type:m.type}}
+function move(dx,dy,dir){
+ if(mode!=='world')return;player.dir=dir;
+ let nx=player.x+dx,ny=player.y+dy;if(tile(nx,ny)===1||tile(nx,ny)===3)return;
+ player.x=nx;player.y=ny;player.step++;
+ if(tile(nx,ny)===0&&Math.random()<0.055&&nx>8&&ny>8)encounter();
+ updateHud();render();
+}
+function encounter(){
+ let n=rnd(['Pedruxo','Lumimel','Névoa','Folhito','Marulho']);wild={...makeMon(n),max:mons[n].hp};mode='battle';turn=0;notice=`Um ${n} selvagem apareceu!`;render();
+}
+function battleAction(a){
+ if(mode!=='battle')return;let p=team[0];
+ if(a===4){mode='world';notice='Conseguiste fugir.';noticeTimer=100;render();return}
+ if(a===3){
+  if(orbs<=0){notice='Já não tens orbes!';render();return}orbs--;
+  if(Math.random()<0.62||wild.hp<=wild.max*.25){team.push({...wild,hp:Math.max(1,wild.hp)});notice=`Capturaste ${wild.name}!`;mode='world';noticeTimer=130;updateHud();render();return}
+  notice='O monstro escapou do orbe!';wild.hp-=2;
+ }else{
+  let dmg=p.atk+(a===2?5:0)+Math.floor(Math.random()*4);wild.hp=Math.max(0,wild.hp-dmg);notice=`${p.name} usou ${a===2?'Ataque especial':'um ataque'}! (-${dmg} PV)`;
+ }
+ if(wild.hp<=0){p.level++;p.max+=3;p.hp=Math.min(p.max,p.hp+8);notice=`Vitória! ${p.name} subiu para o nível ${p.level}.`;mode='world';noticeTimer=150;updateHud();render();return}
+ let dmg=Math.max(2,mons[wild.name].atk+Math.floor(Math.random()*3));p.hp=Math.max(0,p.hp-dmg);notice+=` ${wild.name} respondeu: -${dmg} PV.`;
+ if(p.hp<=0){p.hp=1;notice='O teu companheiro está cansado. Regressou com 1 PV.';mode='world';noticeTimer=150}
+ render();updateHud();
+}
+function interact(){
+ if(mode!=='world')return;
+ if(Math.abs(player.x-13)+Math.abs(player.y-8)<=1){showDialog('Professora Lira','Bem-vindo a Aural! Explora o prado a leste. A relva alta esconde monstros selvagens. Usa orbes para os capturar.',[{label:'Obrigado!',fn:closeDialog}]);return}
+ if(Math.abs(player.x-18)+Math.abs(player.y-10)<=1){team.forEach(m=>m.hp=m.max);notice='A equipa recuperou todos os PV!';noticeTimer=120;updateHud();render();return}
+ notice='Não há nada para interagir aqui.';noticeTimer=70;render();
+}
+function teamView(){showDialog('A tua equipa',team.length?team.map(m=>`${m.name} — Nível ${m.level} — PV ${m.hp}/${m.max}`).join('<br>'):'Ainda não tens companheiros.',[{label:'Voltar',fn:closeDialog}]);}
+function save(){localStorage.setItem('auralSave',JSON.stringify({player,orbs,team}));notice='Jogo guardado neste dispositivo.';noticeTimer=100;render()}
+function load(){try{let s=JSON.parse(localStorage.getItem('auralSave'));if(s){player=s.player;orbs=s.orbs;team=s.team;return true}}catch(e){}return false}
+function keydown(e){
+ let k=e.key.toLowerCase();if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k))e.preventDefault();
+ if(mode==='battle'){if(k==='1')battleAction(1);if(k==='2')battleAction(2);if(k==='3')battleAction(3);if(k==='4'||k==='escape')battleAction(4);return}
+ if(mode!=='world')return;
+ if(k==='arrowup'||k==='w')move(0,-1,'up');if(k==='arrowdown'||k==='s')move(0,1,'down');if(k==='arrowleft'||k==='a')move(-1,0,'left');if(k==='arrowright'||k==='d')move(1,0,'right');if(k==='e'||k===' ')interact();
+}
+window.addEventListener('keydown',keydown);
+document.querySelectorAll('[data-dir]').forEach(b=>{const dir=b.dataset.dir;const fn=()=>{if(dir==='up')move(0,-1,dir);if(dir==='down')move(0,1,dir);if(dir==='left')move(-1,0,dir);if(dir==='right')move(1,0,dir)};
+ b.addEventListener('pointerdown',e=>{e.preventDefault();fn()})});
+document.getElementById('talk').onclick=interact;document.getElementById('team').onclick=teamView;document.getElementById('save').onclick=save;
+canvas.addEventListener('click',e=>{if(mode==='battle'){let r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*480,y=(e.clientY-r.top)/r.height*320;if(y>252){if(x<130)battleAction(1);else if(x<245)battleAction(2);else if(x<355)battleAction(3);else battleAction(4)}}});
+if(load()){mode='world';updateHud();render();showDialog('Bem-vindo de volta!','Encontrámos o teu progresso guardado.',[{label:'Continuar',fn:closeDialog},{label:'Novo jogo',fn:()=>{localStorage.removeItem('auralSave');player={x:14,y:13,dir:'down',step:0};orbs=5;team=[];startGame()}}])}
+else{render();showDialog('Monstros de Aural','Uma nova aventura começa! Explora uma região cheia de criaturas, conhece pessoas e torna-te no melhor treinador de Aural.',[{label:'Começar aventura',fn:startGame}])}
+})();
+</script>
+</body>
+</html>
